@@ -1,0 +1,11 @@
+# local data & secrets — never ship these
+gwc.db
+database_url.txt
+.streamlit/secrets.toml
+*.log
+announcements/
+.preview/
+__pycache__/
+*.pyc
+.DS_Store
+*backup*.xlsx
