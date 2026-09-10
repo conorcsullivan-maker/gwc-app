@@ -92,6 +92,27 @@ def fetch_week_live(year: int, week: int) -> dict[str, dict]:
     return out
 
 
+SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary"
+
+
+def fetch_halftime(espn_id: str) -> dict | None:
+    """First-half score {away_1h, home_1h} once a game reaches halftime."""
+    resp = requests.get(SUMMARY, params={"event": espn_id}, timeout=20)
+    resp.raise_for_status()
+    comp = resp.json().get("header", {}).get("competitions", [{}])[0]
+    out = {}
+    for c in comp.get("competitors", []):
+        ls = c.get("linescores") or []
+        if len(ls) < 2:
+            return None                      # halftime not reached
+        try:
+            half = sum(int(float(q.get("displayValue", 0))) for q in ls[:2])
+        except (TypeError, ValueError):
+            return None
+        out[f"{c['homeAway']}_1h"] = half
+    return out if len(out) == 2 else None
+
+
 def default_deadline(games: list[dict]) -> str | None:
     """Thursday 4:00 PM ET (charter section V), but never after first kickoff."""
     if not games:

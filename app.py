@@ -13,7 +13,7 @@ from sqlalchemy import and_, select
 
 from gwc import assign, rules, schedule, stats
 from gwc.db import (CURRENT_SEASON, MEMBERS, SEASON_YEAR, assignments,
-                    engine, games, players, rows, weeks)
+                    engine, games, odds_snapshots, players, rows, weeks)
 
 ET = ZoneInfo("America/New_York")
 
@@ -490,6 +490,137 @@ def page_analytics():
                      hide_index=True)
 
 
+# --------------------------------------------------------------- market watch
+@st.cache_data(ttl=600)
+def get_halftime(espn_id):
+    try:
+        return schedule.fetch_halftime(espn_id)
+    except Exception:
+        return None
+
+
+def signed_home_spread(row, game):
+    """Home-team spread (negative = home favored) for one snapshot row."""
+    if row["spread"] is None:
+        return None
+    if row["favorite"] is None:
+        return 0.0
+    return -row["spread"] if row["favorite"] == game["home"] else row["spread"]
+
+
+def page_market():
+    week = current_week()
+    if not week:
+        st.info("No week is set up yet.")
+        return
+    tab_lines, tab_dogs = st.tabs(["📈 Line moves", "🌙 1H Primetime Dogs"])
+
+    with tab_lines:
+        st.subheader(f"Week {week['week_num']} — how the lines have moved")
+        glist = week_games(week["id"])
+        snaps = q(select(odds_snapshots)
+                  .where(and_(odds_snapshots.c.season_year == SEASON_YEAR,
+                              odds_snapshots.c.week_num == week["week_num"]))
+                  .order_by(odds_snapshots.c.ts))
+        by_game = {}
+        for s in snaps:
+            by_game.setdefault(s["espn_id"], []).append(s)
+        if not by_game:
+            st.info("No line history yet — snapshots collect every 6 hours.")
+            return
+        first_ts = min(s["ts"] for s in snaps)
+        st.caption(f"Tracked every 6 hours since "
+                   f"{datetime.fromisoformat(first_ts):%b %-d} — the further "
+                   "into the week, the richer this gets. A line that moves "
+                   "*against* the favorite usually means sharp money on "
+                   "the dog.")
+        move_rows = []
+        for g in glist:
+            hist = by_game.get(g["espn_id"], [])
+            if len(hist) < 1:
+                continue
+            o, n = hist[0], hist[-1]
+            def label(r):
+                if r["spread"] is None:
+                    return "—"
+                return (f"{r['favorite']} -{r['spread']:g}"
+                        if r["favorite"] else "PK")
+            so, sn = signed_home_spread(o, g), signed_home_spread(n, g)
+            if so is not None and sn is not None and sn != so:
+                toward = g["home"] if sn < so else g["away"]
+                move = f"{abs(sn - so):g} pt toward {toward}"
+                dog = (g["away"] if g["favorite"] == g["home"] else g["home"])
+                flag = "🚨 toward the dog" if toward == dog else ""
+            else:
+                move, flag = "—", ""
+            move_rows.append({
+                "Matchup": f"{g['away_abbr']} @ {g['home_abbr']}",
+                "Opened (our tracking)": label(o), "Now": label(n),
+                "O/U now": g["ou_total"], "Move": move, "": flag})
+        st.dataframe(pd.DataFrame(move_rows), use_container_width=True,
+                     hide_index=True)
+        choice = st.selectbox(
+            "Chart a game", glist,
+            format_func=lambda g: f"{matchup(g)} ({kickoff_label(g)})")
+        hist = by_game.get(choice["espn_id"], [])
+        if len(hist) >= 2:
+            df = pd.DataFrame({
+                "when": [datetime.fromisoformat(s["ts"]) for s in hist],
+                f"{choice['home_abbr']} spread (neg = favored)":
+                    [signed_home_spread(s, choice) for s in hist],
+                "total": [s["ou_total"] for s in hist],
+            }).set_index("when")
+            c1, c2 = st.columns(2)
+            c1.line_chart(df.iloc[:, [0]])
+            c2.line_chart(df.iloc[:, [1]])
+        else:
+            st.caption("Need at least two snapshots to chart this one.")
+
+    with tab_dogs:
+        st.subheader("🌙 The 1H Primetime Dogs Tracker")
+        st.caption("JR's baby. Every primetime game (7 PM ET or later), take "
+                   "the underdog on the first-half line — house convention: "
+                   "half the full-game spread. Not part of the parlay; purely "
+                   "for the culture.")
+        wks = q(select(weeks).where(weeks.c.season == CURRENT_SEASON)
+                .order_by(weeks.c.week_num))
+        track, wins, losses, pushes = [], 0, 0, 0
+        for wk in wks:
+            for g in week_games(wk["id"], include_excluded=True):
+                ko = datetime.fromisoformat(g["kickoff_et"])
+                if ko.hour < 19 or not g["favorite"] or not g["spread"]:
+                    continue
+                dog = g["away"] if g["favorite"] == g["home"] else g["home"]
+                line1h = round(g["spread"] / 2 * 2) / 2  # half line, ½-pt steps
+                ht = get_halftime(g["espn_id"]) if g["espn_id"] else None
+                if ht:
+                    dog_pts = (ht["away_1h"] if dog == g["away"]
+                               else ht["home_1h"])
+                    fav_pts = (ht["home_1h"] if dog == g["away"]
+                               else ht["away_1h"])
+                    margin = dog_pts + line1h - fav_pts
+                    if margin > 0:
+                        res, wins = "✅ WIN", wins + 1
+                    elif margin < 0:
+                        res, losses = "❌ LOSS", losses + 1
+                    else:
+                        res, pushes = "➖ PUSH", pushes + 1
+                    half = f"{ht['away_1h']}–{ht['home_1h']} at the half"
+                else:
+                    res, half = "🕐 pending", kickoff_label(g)
+                track.append({"Week": wk["week_num"],
+                              "Game": f"{g['away_abbr']} @ {g['home_abbr']}",
+                              "The bet": f"{dog} +{line1h:g} (1H)",
+                              "Half score": half, "Result": res})
+        rec = f"{wins}-{losses}" + (f"-{pushes}" if pushes else "")
+        st.metric("Season record — primetime dogs, first half", rec or "0-0")
+        if track:
+            st.dataframe(pd.DataFrame(track), use_container_width=True,
+                         hide_index=True)
+        st.caption("Last season's coop record on full-game primetime dogs: "
+                   "7-3. The man may be onto something.")
+
+
 # --------------------------------------------------------------- commissioner
 def create_week(wk_num):
     fetched = schedule.fetch_week(SEASON_YEAR, wk_num)
@@ -771,7 +902,7 @@ def main():
     st.sidebar.caption(f"Signed in as **{user['name']}**"
                        + (" · Commissioner" if user["is_commissioner"] else ""))
     pages = ["🔴 Game Day", "🏈 My Picks", "🧾 Bet Slip", "🏆 Standings",
-             "📈 Analytics"]
+             "📈 Analytics", "📉 Market"]
     if user["is_commissioner"]:
         pages.append("🧢 This Week")
         if IS_LOCAL:
@@ -791,6 +922,8 @@ def main():
         page_standings()
     elif page == "📈 Analytics":
         page_analytics()
+    elif page == "📉 Market":
+        page_market()
     elif page == "🧢 This Week":
         page_this_week()
     else:
