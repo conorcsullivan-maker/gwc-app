@@ -151,7 +151,11 @@ def login_gate():
 
 # ------------------------------------------------------------------- game day
 def cover_status(a, live):
-    """(score_text, verdict_text, emoji) for one pick right now."""
+    """(score_text, verdict_text, emoji) for one pick right now.
+
+    House rule: no wins, losses, or verdicts of any kind until a game is
+    FINAL and graded — in-progress games just show the score.
+    """
     g = live.get(a["espn_id"], {})
     state = g.get("state", "pre")
     if a["result"]:
@@ -162,30 +166,42 @@ def cover_status(a, live):
                  if a["away_score"] is not None else "Final")
         return score, v[0], v[1]
     if state == "pre" or not g:
+        if not a["pick_selection"]:
+            return kickoff_label(a), "no pick submitted", "⚠️"
         return kickoff_label(a), "not started", "🕐"
     hs, as_ = g["home_score"], g["away_score"]
     score = f"{a['away_abbr']} {as_} – {a['home_abbr']} {hs} · {g['detail']}"
     if not a["pick_selection"]:
         return score, "no pick submitted", "⚠️"
-    final_ish = state == "post"
-    if a["pick_type"] == "Over/Under":
-        diff = (hs + as_) - (a["pick_line"] or 0)
-        over = a["pick_selection"].startswith("Over")
-        margin = diff if over else -diff
-    elif a["pick_type"] == "Moneyline":
-        my = hs if a["pick_team"] == a["home"] else as_
-        margin = my - (as_ if a["pick_team"] == a["home"] else hs)
-    else:  # spread
-        my = hs if a["pick_team"] == a["home"] else as_
-        opp = as_ if a["pick_team"] == a["home"] else hs
-        margin = my + (a["pick_line"] or 0) - opp
-    if margin > 0:
-        verb = "covering" if a["pick_type"] != "Moneyline" else "leading"
-        return score, f"{verb} by {margin:g}", "✅"
-    if margin < 0:
-        verb = "down" if a["pick_type"] != "Moneyline" else "trailing by"
-        return score, f"{verb} {-margin:g}", "❌"
-    return score, "dead on the number", "➖"
+    if state == "post":
+        return score, "final — grading…", "⏳"
+    return score, "in play", "🏈"
+
+
+def auto_grade(week, alist, live):
+    """Grade any pick whose game just went final. Runs on every board
+    refresh, so standings and analytics update the moment ESPN calls it —
+    for every viewer, no commissioner action needed. Idempotent."""
+    finals = {eid for eid, g in live.items() if g.get("final")}
+    todo = [a for a in alist
+            if a["pick_selection"] and not a["result"]
+            and a["espn_id"] in finals]
+    if not todo:
+        return False
+    with engine().begin() as conn:
+        for a in todo:
+            g = live[a["espn_id"]]
+            game = dict(a, final=True, home_score=g["home_score"],
+                        away_score=g["away_score"])
+            conn.execute(games.update().where(games.c.id == a["game_id"])
+                         .values(final=True, home_score=g["home_score"],
+                                 away_score=g["away_score"]))
+            res = rules.grade(game, a)
+            if res:
+                conn.execute(assignments.update()
+                             .where(assignments.c.id == a["id"])
+                             .values(result=res))
+    return True
 
 
 def page_game_day():
@@ -193,42 +209,47 @@ def page_game_day():
     if not week:
         st.info("No week is set up yet.")
         return
-    alist = week_assignments(week["id"])
-    if not alist:
-        st.info("No assignments yet this week.")
-        return
     st.subheader(f"🔴 Week {week['week_num']} — Live Board")
-    st.caption("Refreshes itself every 60 seconds on game day. "
+    st.caption("Refreshes every 60 seconds. Picks are only marked won or "
+               "lost when a game goes FINAL — no premature obituaries. "
                f"Lines locked {deadline_label(week)}.")
 
     @st.fragment(run_every=60)
     def live_board():
+        alist = week_assignments(week["id"])
+        if not alist:
+            st.info("No assignments yet this week.")
+            return
         live = get_live(week["week_num"])
-        n_live = sum(1 for g in live.values() if g.get("state") == "in")
+        if auto_grade(week, alist, live):
+            alist = week_assignments(week["id"])   # pick up fresh grades
         done = [a for a in alist if a["pick_selection"]]
-        wins = losses = 0
+        w = sum(1 for a in alist if a["result"] == "Win")
+        l = sum(1 for a in alist if a["result"] == "Loss")
+        p = sum(1 for a in alist if a["result"] == "Push")
+        in_play = sum(1 for a in alist
+                      if not a["result"]
+                      and live.get(a["espn_id"], {}).get("state") == "in")
         rows_out = []
         for a in alist:
             score, verdict, emoji = cover_status(a, live)
-            if emoji == "✅":
-                wins += 1
-            elif emoji == "❌":
-                losses += 1
             rows_out.append({"": emoji, "Day": a["day"],
                              "Member": a["player"],
                              "Matchup": f"{a['away_abbr']} @ {a['home_abbr']}",
                              "Pick": a["pick_selection"] or "—",
                              "Score": score, "Status": verdict})
         c1, c2, c3 = st.columns(3)
-        c1.metric("Legs alive / dead", f"{wins} ✅ · {losses} ❌",
-                  f"{len(done)} picks in")
-        c2.metric("Games live right now", n_live)
+        c1.metric("Final results", f"{w}-{l}-{p}",
+                  f"{w + l + p} of {len(done)} picks settled")
+        c2.metric("In play right now", in_play)
         if not done:
             parlay = "⏳ waiting on picks"
-        elif losses > 0:
+        elif l > 0:
             parlay = "💀 dead"
+        elif w + l + p == len(done) == len(alist):
+            parlay = "🏆 IT HIT?!"
         else:
-            parlay = "😤 STILL ALIVE"
+            parlay = "😤 still alive"
         c3.metric("The parlay", parlay,
                   f"as of {datetime.now(ET):%-I:%M:%S %p ET}")
         st.dataframe(pd.DataFrame(rows_out), use_container_width=True,
@@ -898,6 +919,13 @@ def main():
         login_gate()
         return
     user = st.session_state.user
+    week = current_week()          # grade fresh finals on any page view
+    if week:
+        try:
+            auto_grade(week, week_assignments(week["id"]),
+                       get_live(week["week_num"]))
+        except Exception:
+            pass
     st.sidebar.title("🎩 G.W.C.")
     st.sidebar.caption(f"Signed in as **{user['name']}**"
                        + (" · Commissioner" if user["is_commissioner"] else ""))

@@ -65,7 +65,9 @@ def find_target_week(now):
         if not glist:
             continue
         last_ko = max(datetime.fromisoformat(g["kickoff_et"]) for g in glist)
-        if last_ko > now - timedelta(hours=36):
+        # a week is "over" ~10h after its last kickoff, so the Tuesday-morning
+        # run rolls to next week right after MNF ends
+        if last_ko > now - timedelta(hours=10):
             return w, glist
     return None, None
 
