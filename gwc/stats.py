@@ -106,7 +106,6 @@ def analytics(picks, members):
     overview = [
         slice_rec("All Picks", picks),
         slice_rec("Spreads", [p for p in picks if p["pick_type"] == "Spread"]),
-        slice_rec("Over/Under", [p for p in picks if p["pick_type"] == "Over/Under"]),
         slice_rec("Overs", [p for p in picks if p["pick_type"] == "Over/Under"
                             and str(p["pick_selection"]).startswith("Over")]),
         slice_rec("Unders", [p for p in picks if p["pick_type"] == "Over/Under"
