@@ -237,7 +237,6 @@ def build_pick_analytics(ws):
     conds = [
         ("All Picks", f'{G["season"]},{SCRIT}'),
         ("Spreads", f'{G["ptype"]},"Spread"'),
-        ("Over/Under", f'{G["ptype"]},"Over/Under"'),
         ("Overs", f'{G["pick"]},"Over *"'),
         ("Unders", f'{G["pick"]},"Under *"'),
         ("Moneylines", f'{G["ptype"]},"Moneyline"'),
