@@ -216,7 +216,7 @@ def snapshot_bytes() -> bytes:
         "pick_selection": r["pick_selection"], "fav_dog": r["fav_dog"],
         "home_away": r["home_away"], "day": r["day"], "away": r["away"],
         "home": r["home"], "pick_team": r["pick_team"],
-        "pick_line": r["pick_line"],
+        "pick_line": r["pick_line"], "period": r.get("period"),
     } for r in graded])
 
     wb = openpyxl.Workbook()

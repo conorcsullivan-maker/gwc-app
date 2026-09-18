@@ -66,7 +66,8 @@ def graded_picks(season=None):
     stmt = (select(assignments.c.result, assignments.c.pick_type,
                    assignments.c.pick_selection, assignments.c.fav_dog,
                    assignments.c.home_away, assignments.c.pick_team,
-                   assignments.c.pick_line, players.c.name.label("player"),
+                   assignments.c.pick_line, assignments.c.period,
+                   players.c.name.label("player"),
                    weeks.c.week_num, weeks.c.season, games.c.day,
                    games.c.away, games.c.home)
             .join(players, assignments.c.player_id == players.c.id)

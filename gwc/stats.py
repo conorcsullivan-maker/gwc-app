@@ -30,6 +30,10 @@ def enrich(picks):
     return picks
 
 
+def is_1h(p):
+    return p.get("period") == "1H"
+
+
 def _record(picks):
     w = sum(1 for p in picks if p["result"] == "Win")
     l = sum(1 for p in picks if p["result"] == "Loss")
@@ -115,6 +119,8 @@ def analytics(picks, members):
         slice_rec("Underdogs", [p for p in picks if p["fav_dog"] == "Underdog"]),
         slice_rec("Home Teams", [p for p in picks if p["home_away"] == "Home"]),
         slice_rec("Away Teams", [p for p in picks if p["home_away"] == "Away"]),
+        slice_rec("Full-game bets", [p for p in picks if not is_1h(p)]),
+        slice_rec("1st-half bets", [p for p in picks if is_1h(p)]),
     ]
     per_player = [
         {"Category": m, **_record([p for p in picks if p["player"] == m])}
@@ -253,6 +259,8 @@ def player_matrix(picks, members):
             "Away": rec_str([p for p in mine if p["home_away"] == "Away"]),
             "Primetime (Thu/Mon)": rec_str(
                 [p for p in mine if p.get("day") in ("Thu", "Mon")]),
+            "Full game": rec_str([p for p in mine if not is_1h(p)]),
+            "1st half": rec_str([p for p in mine if is_1h(p)]),
         })
     return out
 
