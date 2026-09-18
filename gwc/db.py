@@ -32,6 +32,9 @@ weeks = Table(
     # draft -> published -> final
     Column("status", String(12), nullable=False, default="draft"),
     Column("deadline_et", String(30)),  # ISO string, America/New_York
+    Column("stake", Float),             # what the coop put on the parlay
+    Column("odds", Integer),            # American odds of the full ticket
+    Column("payout", Float),            # total return (stake + profit) if it hits
 )
 
 games = Table(
@@ -135,7 +138,9 @@ def _add_missing_columns(conn):
     from sqlalchemy import inspect, text
     insp = inspect(conn)
     wanted = {"games": [("away_1h", "INTEGER"), ("home_1h", "INTEGER")],
-              "assignments": [("period", "VARCHAR(4)")]}
+              "assignments": [("period", "VARCHAR(4)")],
+              "weeks": [("stake", "FLOAT"), ("odds", "INTEGER"),
+                        ("payout", "FLOAT")]}
     for table, cols in wanted.items():
         have = {c["name"] for c in insp.get_columns(table)}
         for name, typ in cols:

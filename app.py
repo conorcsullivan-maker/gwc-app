@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import and_, select
 
-from gwc import assign, rules, schedule, stats
+from gwc import assign, cashout, rules, schedule, stats
 from gwc.db import (CURRENT_SEASON, MEMBERS, SEASON_YEAR, assignments,
                     engine, games, odds_snapshots, players, rows, weeks)
 
@@ -271,6 +271,46 @@ def page_game_day():
         st.dataframe(pd.DataFrame(rows_out), use_container_width=True,
                      hide_index=True)
 
+        wk = current_week()               # fresh row: bet details may change
+        if wk.get("payout"):
+            st.markdown("#### 🎟️ The ticket")
+            b1, b2, b3 = st.columns(3)
+            b1.metric("Stake", f"${wk['stake']:,.2f}" if wk.get("stake") else "—")
+            b2.metric("Odds", f"{wk['odds']:+d}" if wk.get("odds") else "—")
+            b3.metric("Pays if it hits", f"${wk['payout']:,.2f}",
+                      (f"+${wk['payout'] - wk['stake']:,.2f} profit"
+                       if wk.get("stake") else None))
+            with st.expander("💸 Cash-out estimate — what a book would offer "
+                             "right now", expanded=in_play > 0):
+                margin = st.slider("Book's margin (haircut on fair value)",
+                                   0, 15, 8, format="%d%%",
+                                   help="Sportsbooks price cash-out at fair "
+                                        "value minus a cut — usually 5–10%.")
+                v = cashout.valuation(wk, alist, live, margin / 100)
+                e1, e2, e3 = st.columns(3)
+                def money(x):
+                    return f"${x:,.2f}" if x < 100 else f"${x:,.0f}"
+                e1.metric("Chance the ticket still hits",
+                          f"{v['prob']:.1%}" if v["prob"] >= 0.001
+                          else f"{v['prob']:.4%}")
+                e2.metric("Fair value right now", money(v["fair"]))
+                e3.metric("Estimated cash-out offer", money(v["offer"]),
+                          "ticket is dead" if v["dead"] else
+                          (f"pushes trimmed payout to ${v['payout']:,.0f}"
+                           if v["pushes"] else None))
+                st.dataframe(pd.DataFrame([{
+                    "Member": l["member"], "Pick": l["pick"],
+                    "Status": {"pre": "not started", "in": "in play",
+                               "post": "final"}.get(l["status"], l["status"]),
+                    "Win prob": f"{l['p']:.0%}"} for l in v["legs"]]),
+                    use_container_width=True, hide_index=True)
+                st.caption("Model: fair value = payout × P(every open leg "
+                           "wins). In-play legs use the current margin vs. "
+                           "the line and time left (NFL margins ≈ normal, "
+                           "σ 13.5 pts full game). Unstarted spread/total "
+                           "legs are 50/50. Charter §VI: cashing out takes a "
+                           "4-of-6 vote.")
+
     live_board()
 
 
@@ -421,8 +461,15 @@ def page_bet_slip():
         slip = [f"🎩🏈 GWC WEEK {week['week_num']} BET SLIP 🏈🎩", ""]
         slip += [f"{a['day']} — {a['player']}: {a['pick_selection']} "
                  f"({matchup(a)})" for a in done]
-        slip += ["", f"{legs}-leg parlay · $5 to win ≈ ${payout:,.0f} "
-                     "(at -110 per leg)", "Good luck, gentlemen. 🍀"]
+        if week.get("payout"):
+            slip += ["", f"{legs}-leg parlay · ${week['stake']:,.0f} "
+                         f"at {week['odds']:+d} → pays ${week['payout']:,.0f}"
+                         if week.get("odds") else
+                         f"{legs}-leg parlay · ${week['stake']:,.0f} → pays "
+                         f"${week['payout']:,.0f}", "Good luck, gentlemen. 🍀"]
+        else:
+            slip += ["", f"{legs}-leg parlay · $5 to win ≈ ${payout:,.0f} "
+                         "(at -110 per leg)", "Good luck, gentlemen. 🍀"]
         st.markdown("**Copy for the group chat:**")
         st.code("\n".join(slip), language=None)
 
@@ -884,6 +931,36 @@ def page_this_week():
                         conn.execute(weeks.update().where(weeks.c.id == week["id"])
                                      .values(status="final"))
                     st.rerun()
+
+    with st.expander("🎟️ The ticket — stake, odds, payout",
+                     expanded=not week.get("payout")):
+        st.caption("Enter the parlay once it's placed. Odds are American "
+                   "(e.g. +219500). Leave payout blank to compute it from "
+                   "stake × odds, or type the book's exact number.")
+        t1, t2, t3 = st.columns(3)
+        stake = t1.number_input("Stake ($)", min_value=0.0, step=1.0,
+                                value=float(week.get("stake") or 5.0))
+        odds = t2.number_input("Odds (American)", step=100,
+                               value=int(week.get("odds") or 0))
+        payout_in = t3.number_input("Payout if it hits ($)", min_value=0.0,
+                                    step=100.0,
+                                    value=float(week.get("payout") or 0.0))
+        if st.button("💾 Save ticket"):
+            payout = payout_in
+            if not payout and odds and stake:
+                mult = (odds / 100 + 1) if odds > 0 else (100 / abs(odds) + 1)
+                payout = round(stake * mult, 2)
+            with engine().begin() as conn:
+                conn.execute(weeks.update().where(weeks.c.id == week["id"])
+                             .values(stake=stake or None, odds=odds or None,
+                                     payout=payout or None))
+            st.rerun()
+        if week.get("payout"):
+            st.success(f"On file: ${week['stake']:,.2f} at {week['odds']:+d} "
+                       f"→ pays ${week['payout']:,.2f}"
+                       if week.get("odds") else
+                       f"On file: ${week['stake']:,.2f} → pays "
+                       f"${week['payout']:,.2f}")
 
     with st.expander("⚙️ Week admin & member PINs"):
         dl = st.text_input("Deadline (ET, ISO — e.g. 2026-09-10T16:00:00-04:00)",
