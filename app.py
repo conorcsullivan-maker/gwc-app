@@ -623,35 +623,88 @@ def page_market():
             return
         first_ts = min(s["ts"] for s in snaps)
         st.caption(f"Tracked every 6 hours since "
-                   f"{datetime.fromisoformat(first_ts):%b %-d} — the further "
-                   "into the week, the richer this gets. A line that moves "
-                   "*against* the favorite usually means sharp money on "
-                   "the dog.")
-        move_rows = []
-        for g in glist:
-            hist = by_game.get(g["espn_id"], [])
-            if len(hist) < 1:
-                continue
-            o, n = hist[0], hist[-1]
-            def label(r):
-                if r["spread"] is None:
-                    return "—"
-                return (f"{r['favorite']} -{r['spread']:g}"
-                        if r["favorite"] else "PK")
-            so, sn = signed_home_spread(o, g), signed_home_spread(n, g)
-            if so is not None and sn is not None and sn != so:
-                toward = g["home"] if sn < so else g["away"]
-                move = f"{abs(sn - so):g} pt toward {toward}"
-                dog = (g["away"] if g["favorite"] == g["home"] else g["home"])
-                flag = "🚨 toward the dog" if toward == dog else ""
+                   f"{datetime.fromisoformat(first_ts):%b %-d}. Everything "
+                   "below is measured against **the line each of us actually "
+                   "locked in** — positive edge means the market has since "
+                   "moved our way and we're holding a better number than "
+                   "you could get now (closing line value).")
+
+        alist = week_assignments(week["id"])
+        live = get_live(week["week_num"])
+        rows_out, tot_edge, good, bad, flat = [], 0.0, 0, 0, 0
+        for a in alist:
+            hist = by_game.get(a["espn_id"], [])
+            g_live = live.get(a["espn_id"], {})
+            started = g_live.get("state", "pre") != "pre"
+            n = hist[-1] if hist else None
+            mkt_lbl = "—"
+            edge = None
+            if n is not None and a.get("period") == "1H":
+                # 1st-half markets ≈ half the full-game numbers (house convention)
+                n = dict(n, spread=(n["spread"] / 2 if n["spread"] else n["spread"]),
+                         ou_total=(n["ou_total"] / 2 if n["ou_total"] else None))
+            if a["pick_selection"] and n is not None:
+                if a["pick_type"] == "Over/Under" and n["ou_total"] is not None:
+                    mkt = n["ou_total"]
+                    over = a["pick_selection"].startswith("Over")
+                    edge = (mkt - a["pick_line"]) if over else (a["pick_line"] - mkt)
+                    mkt_lbl = f"{'Over' if over else 'Under'} {mkt:g}"
+                elif a["pick_type"] in ("Spread", "Moneyline") and n["spread"] is not None:
+                    if n["favorite"] is None:
+                        mkt = 0.0
+                    elif a["pick_team"] == n["favorite"]:
+                        mkt = -n["spread"]
+                    else:
+                        mkt = n["spread"]
+                    ours = a["pick_line"] if a["pick_type"] == "Spread" else mkt
+                    # for ML the number doesn't apply; use movement of the
+                    # spread toward/away from our team since we locked in
+                    if a["pick_type"] == "Moneyline" and hist:
+                        o = hist[0]
+                        o_line = (0.0 if o["favorite"] is None else
+                                  -o["spread"] if a["pick_team"] == o["favorite"]
+                                  else o["spread"])
+                        edge = o_line - mkt
+                    else:
+                        edge = ours - mkt
+                    mkt_lbl = f"{a['pick_team']} {mkt:+g}"
+                if a.get("period") == "1H":
+                    mkt_lbl += " (1H ≈ ½ game line)"
+            if edge is None:
+                verdict = "—"
+            elif edge >= 0.5:
+                verdict, good = "✅ Good — market moved our way", good + 1
+            elif edge <= -0.5:
+                verdict, bad = "❌ Bad — market moved against us", bad + 1
             else:
-                move, flag = "—", ""
-            move_rows.append({
-                "Matchup": f"{g['away_abbr']} @ {g['home_abbr']}",
-                "Opened (our tracking)": label(o), "Now": label(n),
-                "O/U now": g["ou_total"], "Move": move, "": flag})
-        st.dataframe(pd.DataFrame(move_rows), use_container_width=True,
+                verdict, flat = "➖ Flat", flat + 1
+            if edge is not None:
+                tot_edge += edge
+            rows_out.append({
+                "Member": a["player"],
+                "Matchup": f"{a['away_abbr']} @ {a['home_abbr']}",
+                "Our locked line": a["pick_selection"] or "no pick yet",
+                "Closing line" if started else "Market now": mkt_lbl,
+                "Edge (pts)": f"{edge:+g}" if edge is not None else "—",
+                "Verdict": verdict,
+            })
+        picks_in = sum(1 for a in alist if a["pick_selection"])
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Market agrees with us on", f"{good} of {picks_in} legs")
+        m2.metric("Market disagrees on", f"{bad} of {picks_in} legs")
+        m3.metric("Net line edge", f"{tot_edge:+g} pts",
+                  "we're holding better numbers than the market"
+                  if tot_edge > 0 else
+                  "the market got better numbers than us" if tot_edge < 0
+                  else None)
+        st.dataframe(pd.DataFrame(rows_out), use_container_width=True,
                      hide_index=True)
+        st.caption("Edge = our number minus what the market offers now, from "
+                   "our side of the bet. +0.5 or better is a good sign; "
+                   "−0.5 or worse means the money went the other way. Once a "
+                   "game kicks off, the last tracked line becomes its closing "
+                   "line.")
+
         choice = st.selectbox(
             "Chart a game", glist,
             format_func=lambda g: f"{matchup(g)} ({kickoff_label(g)})")
