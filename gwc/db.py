@@ -50,6 +50,8 @@ games = Table(
     Column("ou_total", Float),
     Column("away_score", Integer),
     Column("home_score", Integer),
+    Column("away_1h", Integer),          # first-half scores, for 1H picks
+    Column("home_1h", Integer),
     Column("final", Boolean, nullable=False, default=False),
     Column("excluded", Boolean, nullable=False, default=False),
 )
@@ -61,6 +63,7 @@ assignments = Table(
     Column("game_id", Integer, ForeignKey("games.id"), nullable=False),
     Column("player_id", Integer, ForeignKey("players.id"), nullable=False),
     Column("pick_type", String(12)),     # Spread / Over/Under / Moneyline
+    Column("period", String(4)),         # FG (full game, default) or 1H
     Column("pick_selection", String(60)),  # e.g. "Bears +3.0", "Under 43.5"
     Column("pick_team", String(30)),     # nickname; None for totals
     Column("pick_line", Float),
@@ -127,9 +130,23 @@ def engine():
     return _engine
 
 
+def _add_missing_columns(conn):
+    """create_all never alters existing tables — add new columns by hand."""
+    from sqlalchemy import inspect, text
+    insp = inspect(conn)
+    wanted = {"games": [("away_1h", "INTEGER"), ("home_1h", "INTEGER")],
+              "assignments": [("period", "VARCHAR(4)")]}
+    for table, cols in wanted.items():
+        have = {c["name"] for c in insp.get_columns(table)}
+        for name, typ in cols:
+            if name not in have:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {typ}"))
+
+
 def init_db(eng):
     metadata.create_all(eng)
     with eng.begin() as conn:
+        _add_missing_columns(conn)
         existing = {r.name for r in conn.execute(select(players.c.name))}
         for name in MEMBERS:
             if name not in existing:

@@ -13,7 +13,8 @@ def allowed_pick_types(game: dict) -> list[str]:
 
 
 def build_pick(game: dict, pick_type: str, team: str | None,
-               over_under: str | None, line: float | None = None) -> dict:
+               over_under: str | None, line: float | None = None,
+               period: str = "FG") -> dict:
     """Return the assignment fields for a validated pick.
 
     `line` overrides the game's ESPN line — different sportsbooks post
@@ -24,8 +25,11 @@ def build_pick(game: dict, pick_type: str, team: str | None,
     if pick_type not in allowed_pick_types(game):
         raise ValueError(f"{pick_type} is not allowed for this game "
                          f"(spread is {game.get('spread')}).")
+    if period not in ("FG", "1H"):
+        raise ValueError("Period must be full game or first half.")
     fields = {"pick_type": pick_type, "pick_team": None, "pick_line": None,
-              "fav_dog": None, "home_away": None}
+              "fav_dog": None, "home_away": None, "period": period}
+    tag = " (1H)" if period == "1H" else ""
 
     if pick_type == "Over/Under":
         total = line if line is not None else game.get("ou_total")
@@ -34,7 +38,7 @@ def build_pick(game: dict, pick_type: str, team: str | None,
         if over_under not in ("Over", "Under"):
             raise ValueError("Choose Over or Under.")
         fields["pick_line"] = float(total)
-        fields["pick_selection"] = f"{over_under} {total:g}"
+        fields["pick_selection"] = f"{over_under} {total:g}{tag}"
         return fields
 
     if team not in (game["away"], game["home"]):
@@ -45,7 +49,7 @@ def build_pick(game: dict, pick_type: str, team: str | None,
     if pick_type == "Moneyline":
         fields["fav_dog"] = ("Favorite" if team == game.get("favorite")
                              else "Underdog")
-        fields["pick_selection"] = f"{team} ML"
+        fields["pick_selection"] = f"{team} ML{tag}"
         return fields
 
     if line is not None:
@@ -63,15 +67,23 @@ def build_pick(game: dict, pick_type: str, team: str | None,
     fields["fav_dog"] = ("Favorite" if signed < 0
                          else "Underdog" if signed > 0 else "Pick'em")
     fields["pick_line"] = signed
-    fields["pick_selection"] = f"{team} {signed:+g}"
+    fields["pick_selection"] = f"{team} {signed:+g}{tag}"
     return fields
 
 
 def grade(game: dict, pick: dict) -> str | None:
-    """Return Win / Loss / Push, or None if the game isn't final."""
-    if not game.get("final") or game.get("home_score") is None:
-        return None
-    home_s, away_s = game["home_score"], game["away_score"]
+    """Return Win / Loss / Push, or None if it can't be graded yet.
+
+    First-half picks grade off the halftime score (needs away_1h/home_1h).
+    """
+    if pick.get("period") == "1H":
+        if game.get("home_1h") is None or game.get("away_1h") is None:
+            return None
+        home_s, away_s = game["home_1h"], game["away_1h"]
+    else:
+        if not game.get("final") or game.get("home_score") is None:
+            return None
+        home_s, away_s = game["home_score"], game["away_score"]
 
     if pick["pick_type"] == "Over/Under":
         total = home_s + away_s

@@ -53,7 +53,8 @@ def week_assignments(week_id):
                    games.c.away, games.c.home, games.c.day, games.c.kickoff_et,
                    games.c.away_abbr, games.c.home_abbr, games.c.espn_id,
                    games.c.favorite, games.c.spread, games.c.ou_total,
-                   games.c.away_score, games.c.home_score, games.c.final)
+                   games.c.away_score, games.c.home_score, games.c.final,
+                   games.c.away_1h, games.c.home_1h)
             .join(players, assignments.c.player_id == players.c.id)
             .join(games, assignments.c.game_id == games.c.id)
             .where(assignments.c.week_id == week_id)
@@ -175,6 +176,8 @@ def cover_status(a, live):
         return score, "no pick submitted", "⚠️"
     if state == "post":
         return score, "final — grading…", "⏳"
+    if a.get("period") == "1H":
+        return score, "in play (1st-half bet)", "🏈"
     return score, "in play", "🏈"
 
 
@@ -183,19 +186,31 @@ def auto_grade(week, alist, live):
     refresh, so standings and analytics update the moment ESPN calls it —
     for every viewer, no commissioner action needed. Idempotent."""
     finals = {eid for eid, g in live.items() if g.get("final")}
+    started = {eid for eid, g in live.items() if g.get("state") != "pre"}
     todo = [a for a in alist
             if a["pick_selection"] and not a["result"]
-            and a["espn_id"] in finals]
+            and (a["espn_id"] in finals
+                 or (a.get("period") == "1H" and a["espn_id"] in started))]
     if not todo:
         return False
     with engine().begin() as conn:
         for a in todo:
             g = live[a["espn_id"]]
-            game = dict(a, final=True, home_score=g["home_score"],
-                        away_score=g["away_score"])
-            conn.execute(games.update().where(games.c.id == a["game_id"])
-                         .values(final=True, home_score=g["home_score"],
-                                 away_score=g["away_score"]))
+            game = dict(a)
+            if a["espn_id"] in finals:
+                game.update(final=True, home_score=g["home_score"],
+                            away_score=g["away_score"])
+                conn.execute(games.update().where(games.c.id == a["game_id"])
+                             .values(final=True, home_score=g["home_score"],
+                                     away_score=g["away_score"]))
+            if a.get("period") == "1H" and game.get("home_1h") is None:
+                ht = get_halftime(a["espn_id"])
+                if ht:
+                    game.update(home_1h=ht["home_1h"], away_1h=ht["away_1h"])
+                    conn.execute(games.update()
+                                 .where(games.c.id == a["game_id"])
+                                 .values(home_1h=ht["home_1h"],
+                                         away_1h=ht["away_1h"]))
             res = rules.grade(game, a)
             if res:
                 conn.execute(assignments.update()
@@ -264,6 +279,13 @@ def pick_controls(a, key_prefix=""):
     g = a
     types = rules.allowed_pick_types(g)
     k = f"{key_prefix}{a['id']}"
+    period = "FG"
+    if key_prefix == "cm":          # commissioner override can set 1st-half bets
+        period = st.radio("Period", ["FG", "1H"], key=f"p{k}", horizontal=True,
+                          index=1 if a.get("period") == "1H" else 0,
+                          format_func=lambda v: {"FG": "Full game",
+                                                 "1H": "1st half"}[v],
+                          label_visibility="collapsed")
     c1, c2, c3, c4, c5 = st.columns([2.2, 1.8, 1.2, 0.7, 0.7],
                                     vertical_alignment="bottom")
     ptype = c1.radio("Type", types, key=f"t{k}", horizontal=True,
@@ -308,11 +330,12 @@ def pick_controls(a, key_prefix=""):
         c3.markdown("&nbsp;")
     if c4.button("Lock it in 🔒", key=f"b{k}", type="primary"):
         try:
-            fields = rules.build_pick(g, ptype, team, ou, line)
+            fields = rules.build_pick(g, ptype, team, ou, line, period)
             with engine().begin() as conn:
                 conn.execute(assignments.update()
                              .where(assignments.c.id == a["id"])
-                             .values(submitted_at=datetime.utcnow(), **fields))
+                             .values(submitted_at=datetime.utcnow(),
+                                     result=None, **fields))
             return True
         except ValueError as e:
             st.error(str(e))
@@ -322,7 +345,8 @@ def pick_controls(a, key_prefix=""):
                          .where(assignments.c.id == a["id"])
                          .values(pick_type=None, pick_selection=None,
                                  pick_team=None, pick_line=None, fav_dog=None,
-                                 home_away=None, submitted_at=None, result=None))
+                                 home_away=None, submitted_at=None, result=None,
+                                 period=None))
         return True
     return False
 

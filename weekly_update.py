@@ -193,6 +193,19 @@ def grade_pending():
                     g.update(final=True, home_score=f["home_score"],
                              away_score=f["away_score"])
                 for a in [p for p in pending if p["game_id"] == g["id"]]:
+                    if a.get("period") == "1H" and g.get("home_1h") is None \
+                            and f and f.get("state") != "pre":
+                        try:
+                            ht = schedule.fetch_halftime(g["espn_id"])
+                        except Exception:
+                            ht = None
+                        if ht:
+                            g.update(home_1h=ht["home_1h"],
+                                     away_1h=ht["away_1h"])
+                            conn.execute(games.update()
+                                         .where(games.c.id == g["id"])
+                                         .values(home_1h=ht["home_1h"],
+                                                 away_1h=ht["away_1h"]))
                     res = rules.grade(g, a)
                     if res:
                         conn.execute(assignments.update()
