@@ -236,6 +236,13 @@ def main():
     graded = grade_pending()
     if graded:
         log(f"graded {graded} finished pick(s)")
+    try:
+        from gwc import clv
+        n = clv.backfill(engine())
+        if n:
+            log(f"closing-line value recorded for {n} pick(s)")
+    except Exception as e:
+        log(f"CLV backfill skipped: {e}")
 
     if WORKBOOK.exists():
         try:

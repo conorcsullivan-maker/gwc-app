@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import and_, select
 
-from gwc import assign, cashout, rules, schedule, stats
+from gwc import assign, cashout, clv, rules, schedule, stats
 from gwc.db import (CURRENT_SEASON, MEMBERS, SEASON_YEAR, assignments,
                     engine, games, odds_snapshots, players, rows, weeks)
 
@@ -1014,6 +1014,45 @@ def page_this_week():
                        if week.get("odds") else
                        f"On file: ${week['stake']:,.2f} → pays "
                        f"${week['payout']:,.2f}")
+
+    with st.expander("📉 Market vs. outcomes — does beating the line matter? "
+                     "(commissioner only)"):
+        clv.backfill(engine())
+        rep = clv.report(engine(), CURRENT_SEASON)
+        ov = rep["overall"]
+        if not ov["Picks"]:
+            st.info("Fills in as picks get graded — needs the odds tracker "
+                    "running through the week (it is).")
+        else:
+            st.caption("Closing line value = our locked number minus where "
+                       "the market closed at kickoff, from our side. The "
+                       "question: when the market moves against us, do we "
+                       "still hit? When it moves for us, do we cash more?")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Graded picks with CLV", ov["Picks"])
+            k2.metric("Average CLV", f"{ov['Avg CLV']:+.2f} pts",
+                      "we beat the close on average" if ov["Avg CLV"] > 0
+                      else "the market beat us on average" if ov["Avg CLV"] < 0
+                      else None)
+            k3.metric("Record", f"{ov['W']}-{ov['L']}-{ov['P']}",
+                      fmt_pct(ov["Win %"]))
+            st.markdown("**Outcomes by how the market moved**")
+            st.dataframe(pct_df(rep["buckets"]).assign(
+                **{"Avg CLV": [f"{b['Avg CLV']:+.2f}" for b in rep["buckets"]]}),
+                use_container_width=True, hide_index=True)
+            c1, c2 = st.columns(2)
+            c1.markdown("**Who gets the best numbers**")
+            mdf = pct_df(rep["members"])
+            mdf["Avg CLV (pts)"] = mdf["Avg CLV (pts)"].map(lambda v: f"{v:+.2f}")
+            c1.dataframe(mdf, use_container_width=True, hide_index=True)
+            c2.markdown("**Week by week**")
+            wdf = pct_df(rep["weekly"])
+            wdf["Net CLV (pts)"] = wdf["Net CLV (pts)"].map(lambda v: f"{v:+g}")
+            c2.dataframe(wdf, use_container_width=True, hide_index=True)
+            with st.expander("Every pick"):
+                ddf = pd.DataFrame(rep["detail"])
+                ddf["CLV"] = ddf["CLV"].map(lambda v: f"{v:+g}")
+                st.dataframe(ddf, use_container_width=True, hide_index=True)
 
     with st.expander("⚙️ Week admin & member PINs"):
         dl = st.text_input("Deadline (ET, ISO — e.g. 2026-09-10T16:00:00-04:00)",

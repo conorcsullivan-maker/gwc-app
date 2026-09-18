@@ -74,6 +74,7 @@ assignments = Table(
     Column("home_away", String(5)),      # Home / Away
     Column("submitted_at", DateTime),
     Column("result", String(6)),         # Win / Loss / Push
+    Column("clv", Float),                # closing-line value in pts (+ = good)
 )
 
 odds_snapshots = Table(
@@ -138,7 +139,7 @@ def _add_missing_columns(conn):
     from sqlalchemy import inspect, text
     insp = inspect(conn)
     wanted = {"games": [("away_1h", "INTEGER"), ("home_1h", "INTEGER")],
-              "assignments": [("period", "VARCHAR(4)")],
+              "assignments": [("period", "VARCHAR(4)"), ("clv", "FLOAT")],
               "weeks": [("stake", "FLOAT"), ("odds", "INTEGER"),
                         ("payout", "FLOAT")]}
     for table, cols in wanted.items():
