@@ -132,6 +132,36 @@ def deadline_label(week):
     return dl.strftime("%A %-m/%-d %-I:%M %p ET") if dl else "not set"
 
 
+def lock_state(week):
+    """Picks harden at the week's FIRST kickoff. The posted deadline is a
+    soft target — late picks are still allowed right up to kickoff, but
+    nobody gets to pick a game that has already started."""
+    if not week:
+        return None, False
+    kos = [datetime.fromisoformat(g["kickoff_et"])
+           for g in week_games(week["id"]) if g["kickoff_et"]]
+    if not kos:
+        return None, False
+    lock = min(kos)
+    return lock, datetime.now(ET) > lock
+
+
+def lock_label(week):
+    lock, _ = lock_state(week)
+    return lock.strftime("%A %-m/%-d %-I:%M %p ET") if lock else "kickoff"
+
+
+def countdown(target):
+    left = target - datetime.now(ET)
+    total = int(left.total_seconds())
+    if total <= 0:
+        return "now"
+    d, rem = divmod(total, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    return (f"{d}d {h}h" if d else f"{h}h {m}m")
+
+
 # ---------------------------------------------------------------------- login
 def login_gate():
     st.title("🎩 The Gentlemen's Wagering Cooperative")
@@ -228,7 +258,7 @@ def page_game_day():
     st.subheader(f"🔴 Week {week['week_num']} — Live Board")
     st.caption("Refreshes every 60 seconds. Picks are only marked won or "
                "lost when a game goes FINAL — no premature obituaries. "
-               f"Lines locked {deadline_label(week)}.")
+               f"Picks lock at kickoff — {lock_label(week)}.")
 
     @st.fragment(run_every=60)
     def live_board():
@@ -398,17 +428,23 @@ def page_my_picks(user):
         st.info("No week is set up yet. Pester the Commissioner.")
         return
     st.subheader(f"Week {week['week_num']} — Your Assignments")
-    dl, past = deadline_state(week)
-    locked = (past or week["status"] == "final") and not user["is_commissioner"]
-    if dl and not past:
-        left = dl - datetime.now(ET)
-        hrs, rem = divmod(int(left.total_seconds()), 3600)
-        st.info(f"⏳ Picks lock **{deadline_label(week)}** — "
-                f"{hrs}h {rem // 60}m to go. You can change your pick "
-                "until then.")
-    elif past and locked:
-        st.error(f"⏰ Deadline passed ({deadline_label(week)}). "
-                 "Late changes require the Commissioner (Charter §XIII).")
+    dl, past_due = deadline_state(week)
+    lock, past_lock = lock_state(week)
+    locked = ((past_lock or week["status"] == "final")
+              and not user["is_commissioner"])
+    if past_lock:
+        st.error(f"🔒 Picks locked at kickoff ({lock_label(week)}). "
+                 "Changes now require the Commissioner (Charter §XIII).")
+    elif past_due and dl:
+        st.warning(f"⚠️ The {dl:%-I:%M %p} deadline has passed — get your "
+                   f"picks in. They stay open until kickoff "
+                   f"**{lock_label(week)}** ({countdown(lock)} left), but "
+                   "you're on the Commissioner's list (Charter §XIII).")
+    elif dl:
+        st.info(f"⏳ Picks due **{deadline_label(week)}** "
+                f"({countdown(dl)} to go). Hard lock is kickoff — "
+                f"{lock_label(week)} — and you can change your pick any "
+                "time before that.")
 
     mine = [a for a in week_assignments(week["id"])
             if a["player_id"] == user["id"]]
@@ -854,7 +890,9 @@ def assignments_message(week, alist):
             lines.append(f"  • {matchup(a)} ({kickoff_label(a)}) — {line_summary(a)}")
         lines.append("")
     lines.append(f"Picks due {deadline_label(week)} — make them on the site! "
-                 "Spreads & totals; ML only if the spread is under 3.")
+                 f"Stragglers have until kickoff ({lock_label(week)}); after "
+                 "that you're locked out. Spreads & totals; ML only if the "
+                 "spread is under 3.")
     return "\n".join(lines)
 
 

@@ -154,9 +154,13 @@ def write_announcement(week):
     dl = week["deadline_et"]
     if dl:
         dl = datetime.fromisoformat(dl).strftime("%A %-m/%-d %-I:%M %p ET")
-    lines += ["", f"Picks due {dl}. Spreads & totals; ML only if the spread "
-                  "is under 3. Lines are ESPN's — send your book's line with "
-                  "your pick."]
+    kos = [datetime.fromisoformat(a["kickoff_et"]) for a in alist
+           if a["kickoff_et"]]
+    lock = min(kos).strftime("%A %-m/%-d %-I:%M %p ET") if kos else "kickoff"
+    lines += ["", f"Picks due {dl}. Stragglers have until kickoff ({lock}) — "
+                  "after that the board locks. Spreads & totals; ML only if "
+                  "the spread is under 3. Lines are ESPN's — send your book's "
+                  "line with your pick."]
     out = APP_DIR / "announcements"
     out.mkdir(exist_ok=True)
     f = out / f"week-{week['week_num']:02d}.txt"
