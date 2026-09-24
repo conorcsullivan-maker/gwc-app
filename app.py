@@ -120,6 +120,12 @@ def pct_df(data, pct_keys=("Win %",)):
     return df
 
 
+def half_line(x):
+    """House convention: a first-half number is half the full-game number,
+    rounded to the nearest half point (round(x)/2 does exactly that)."""
+    return round(float(x)) / 2
+
+
 def deadline_state(week):
     if not week or not week["deadline_et"]:
         return None, False
@@ -350,13 +356,16 @@ def pick_controls(a, key_prefix=""):
     g = a
     types = rules.allowed_pick_types(g)
     k = f"{key_prefix}{a['id']}"
-    period = "FG"
-    if key_prefix == "cm":          # commissioner override can set 1st-half bets
-        period = st.radio("Period", ["FG", "1H"], key=f"p{k}", horizontal=True,
-                          index=1 if a.get("period") == "1H" else 0,
-                          format_func=lambda v: {"FG": "Full game",
-                                                 "1H": "1st half"}[v],
-                          label_visibility="collapsed")
+    # Charter amendment (4-of-6 vote, Sept 2026): anyone may take a bet on
+    # the first half instead of the full game.
+    period = st.radio("Period", ["FG", "1H"], key=f"p{k}", horizontal=True,
+                      index=1 if a.get("period") == "1H" else 0,
+                      format_func=lambda v: {"FG": "Full game",
+                                             "1H": "1st half"}[v],
+                      label_visibility="collapsed",
+                      help="First-half bets settle at halftime. The line "
+                           "defaults to half the full-game number — edit it "
+                           "to whatever your book actually posts.")
     c1, c2, c3, c4, c5 = st.columns([2.2, 1.8, 1.2, 0.7, 0.7],
                                     vertical_alignment="bottom")
     ptype = c1.radio("Type", types, key=f"t{k}", horizontal=True,
@@ -370,27 +379,35 @@ def pick_controls(a, key_prefix=""):
         ou = c2.radio("Side", ["Over", "Under"], key=f"s{k}",
                       horizontal=True, index=default, label_visibility="collapsed")
         saved = (a["pick_line"] if a["pick_type"] == "Over/Under"
+                 and (a.get("period") or "FG") == period
                  and a["pick_line"] is not None else None)
+        derived = g["ou_total"] or 44.5
+        if period == "1H":
+            derived = half_line(derived)
         line = c3.number_input(
-            "Total", value=float(saved if saved is not None
-                                 else g["ou_total"] or 44.5), step=0.5,
-            format="%.1f", key=f"l{k}-ou",
-            help="Edit if your book's total differs from ESPN's")
+            "Total" if period == "FG" else "1H total",
+            value=float(saved if saved is not None else derived), step=0.5,
+            format="%.1f", key=f"l{k}-ou-{period}",
+            help="Edit if your book's total differs from this one")
     elif ptype == "Spread":
         opts = [g["away"], g["home"]]
         default = opts.index(a["pick_team"]) if a["pick_team"] in opts else 0
         team = c2.radio("Team", opts, key=f"m{k}", horizontal=True,
                         index=default, label_visibility="collapsed")
         saved = (a["pick_line"] if a["pick_type"] == "Spread"
-                 and a["pick_team"] == team and a["pick_line"] is not None
-                 else None)
+                 and a["pick_team"] == team
+                 and (a.get("period") or "FG") == period
+                 and a["pick_line"] is not None else None)
         if g["spread"] is None or g["favorite"] is None:
             derived = 0.0
         else:
             derived = -g["spread"] if team == g["favorite"] else g["spread"]
+            if period == "1H":
+                derived = half_line(derived)
         line = c3.number_input(
-            "Line", value=float(saved if saved is not None else derived),
-            step=0.5, format="%.1f", key=f"l{k}-{team}",
+            "Line" if period == "FG" else "1H line",
+            value=float(saved if saved is not None else derived),
+            step=0.5, format="%.1f", key=f"l{k}-{team}-{period}",
             help="Spread for your team — negative means laying points. "
                  "Enter the line your book gave you")
     else:
@@ -446,6 +463,10 @@ def page_my_picks(user):
                 f"{lock_label(week)} — and you can change your pick any "
                 "time before that.")
 
+    st.caption("Spreads and totals, full game **or first half** (coop vote, "
+               "Sept 2026 — first-half bets settle at halftime). Moneyline "
+               "only when the game spread is under 3 (Charter §III). Enter "
+               "the line your own book gave you.")
     mine = [a for a in week_assignments(week["id"])
             if a["player_id"] == user["id"]]
     if not mine:
@@ -773,7 +794,7 @@ def page_market():
                 if ko.hour < 19 or not g["favorite"] or not g["spread"]:
                     continue
                 dog = g["away"] if g["favorite"] == g["home"] else g["home"]
-                line1h = round(g["spread"] / 2 * 2) / 2  # half line, ½-pt steps
+                line1h = half_line(g["spread"])
                 ht = get_halftime(g["espn_id"]) if g["espn_id"] else None
                 if ht:
                     dog_pts = (ht["away_1h"] if dog == g["away"]
@@ -891,8 +912,8 @@ def assignments_message(week, alist):
         lines.append("")
     lines.append(f"Picks due {deadline_label(week)} — make them on the site! "
                  f"Stragglers have until kickoff ({lock_label(week)}); after "
-                 "that you're locked out. Spreads & totals; ML only if the "
-                 "spread is under 3.")
+                 "that you're locked out. Spreads & totals, full game or "
+                 "1st half; ML only if the spread is under 3.")
     return "\n".join(lines)
 
 

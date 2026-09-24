@@ -158,8 +158,8 @@ def write_announcement(week):
            if a["kickoff_et"]]
     lock = min(kos).strftime("%A %-m/%-d %-I:%M %p ET") if kos else "kickoff"
     lines += ["", f"Picks due {dl}. Stragglers have until kickoff ({lock}) — "
-                  "after that the board locks. Spreads & totals; ML only if "
-                  "the spread is under 3. Lines are ESPN's — send your book's "
+                  "after that the board locks. Spreads & totals, full "
+                  "game or 1st half; ML only if the spread is under 3. Lines are ESPN's — send your book's "
                   "line with your pick."]
     out = APP_DIR / "announcements"
     out.mkdir(exist_ok=True)
