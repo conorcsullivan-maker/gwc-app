@@ -3,6 +3,9 @@ sqlalchemy>=2.0
 requests>=2.31
 pandas>=2.0
 openpyxl>=3.1
-psycopg2-binary>=2.9
 
-# pinning nothing new — touched to force a full Streamlit Cloud restart
+# Postgres drivers: SQLAlchemy 2.0 resolves a bare postgresql:// URL to
+# psycopg2, while 2.1 switched the default to psycopg (v3). Ship both so the
+# URL stays driver-agnostic no matter which SQLAlchemy the host installs.
+psycopg2-binary>=2.9
+psycopg[binary]>=3.1
