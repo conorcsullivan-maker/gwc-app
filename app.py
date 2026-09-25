@@ -223,11 +223,15 @@ def auto_grade(week, alist, live):
     refresh, so standings and analytics update the moment ESPN calls it —
     for every viewer, no commissioner action needed. Idempotent."""
     finals = {eid for eid, g in live.items() if g.get("final")}
-    started = {eid for eid, g in live.items() if g.get("state") != "pre"}
+    # a 1H bet can only settle once the first half is over: halftime, Q3+,
+    # or final. Never mid-2nd-quarter.
+    half_done = {eid for eid, g in live.items()
+                 if g.get("final") or (g.get("period") or 0) >= 3
+                 or g.get("status_name") == "STATUS_HALFTIME"}
     todo = [a for a in alist
             if a["pick_selection"] and not a["result"]
             and (a["espn_id"] in finals
-                 or (a.get("period") == "1H" and a["espn_id"] in started))]
+                 or (a.get("period") == "1H" and a["espn_id"] in half_done))]
     if not todo:
         return False
     with engine().begin() as conn:
@@ -641,7 +645,7 @@ def page_analytics():
 
 
 # --------------------------------------------------------------- market watch
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=90)
 def get_halftime(espn_id):
     try:
         return schedule.fetch_halftime(espn_id)

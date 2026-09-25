@@ -85,6 +85,8 @@ def fetch_week_live(year: int, week: int) -> dict[str, dict]:
         out[event["id"]] = {
             "state": stype.get("state", "pre"),          # pre / in / post
             "detail": stype.get("shortDetail", ""),
+            "period": status.get("period") or 0,         # quarter number
+            "status_name": (stype.get("name") or "").upper(),
             "home_score": int(teams["home"].get("score") or 0),
             "away_score": int(teams["away"].get("score") or 0),
             "final": bool(stype.get("completed")),
@@ -96,15 +98,29 @@ SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary"
 
 
 def fetch_halftime(espn_id: str) -> dict | None:
-    """First-half score {away_1h, home_1h} once a game reaches halftime."""
+    """First-half score {away_1h, home_1h}, ONLY once the half is truly over.
+
+    ESPN appends a linescore entry the moment a quarter *begins*, so a
+    two-element array during the 2nd quarter is a partial score, not a
+    halftime score. Grading off that settles first-half bets early and
+    wrong, so the game clock — not the array length — is the authority:
+    the half is over only at halftime, in Q3+, or once the game is final.
+    """
     resp = requests.get(SUMMARY, params={"event": espn_id}, timeout=20)
     resp.raise_for_status()
     comp = resp.json().get("header", {}).get("competitions", [{}])[0]
+    status = comp.get("status") or {}
+    stype = status.get("type") or {}
+    period = status.get("period") or 0
+    half_over = (bool(stype.get("completed")) or period >= 3
+                 or (stype.get("name") or "").upper() == "STATUS_HALFTIME")
+    if not half_over:
+        return None
     out = {}
     for c in comp.get("competitors", []):
         ls = c.get("linescores") or []
         if len(ls) < 2:
-            return None                      # halftime not reached
+            return None
         try:
             half = sum(int(float(q.get("displayValue", 0))) for q in ls[:2])
         except (TypeError, ValueError):
