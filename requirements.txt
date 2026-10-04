@@ -9,3 +9,4 @@ openpyxl>=3.1
 # URL stays driver-agnostic no matter which SQLAlchemy the host installs.
 psycopg2-binary>=2.9
 psycopg[binary]>=3.1
+# rebuild marker: on_ticket + totals fix (2026-10-04)
