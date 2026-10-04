@@ -67,23 +67,30 @@ def leg_win_prob(a: dict, g: dict | None) -> float:
         return 0.5 if a["pick_type"] != "Moneyline" else _ml_prior(a)
     period = a.get("period") or "FG"
     hs, as_ = g["home_score"], g["away_score"]
+    # nothing left to play once it's final, whatever the status string says
+    f = 0.0 if state == "post" else fraction_remaining(g.get("detail", ""),
+                                                       period)
     if a["pick_type"] == "Over/Under":
-        margin = (hs + as_) - (a["pick_line"] or 0)
+        line = a["pick_line"] or 0.0
+        # A total must account for the points still to COME, or an 0-0 game
+        # in the 1st quarter reads as a lock for the under. The line itself
+        # is the market's estimate of a full game's scoring, so the points
+        # still expected ≈ line × fraction of the game remaining.
+        margin = (hs + as_ + line * f) - line
         if a["pick_selection"].startswith("Under"):
             margin = -margin
         sigma = SIGMA_TOTAL
     else:
+        # Spreads/moneylines need no such term: the expected change in margin
+        # over the rest of a game is ~0, so the current margin is the mean.
         my = hs if a["pick_team"] == a["home"] else as_
         opp = as_ if a["pick_team"] == a["home"] else hs
         line = a["pick_line"] if a["pick_type"] == "Spread" else 0.0
         margin = my + (line or 0) - opp
         sigma = SIGMA_MARGIN
-    f = fraction_remaining(g.get("detail", ""), period)
     if period == "1H":
         sigma = sigma / math.sqrt(2)       # a half has half the variance
     if f <= 0.0:
-        return 1.0 if margin > 0 else 0.0 if margin < 0 else 0.5
-    if state == "post":
         return 1.0 if margin > 0 else 0.0 if margin < 0 else 0.5
     return _phi(margin / (sigma * math.sqrt(f)))
 
@@ -103,6 +110,9 @@ def valuation(week: dict, alist: list[dict], live: dict,
     """Fair value and estimated book offer for the ticket right now."""
     payout = week.get("payout") or 0.0
     stake = week.get("stake") or 0.0
+    # only legs on the live ticket price it; picks left off a re-load still
+    # count for season stats but not here
+    alist = [a for a in alist if a.get("on_ticket") is not False]
     legs = []
     prob = 1.0
     pushes = 0

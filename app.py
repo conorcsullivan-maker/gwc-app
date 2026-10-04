@@ -280,6 +280,11 @@ def page_game_day():
         if auto_grade(week, alist, live):
             alist = week_assignments(week["id"])   # pick up fresh grades
         done = [a for a in alist if a["pick_selection"]]
+        ticket = [a for a in alist if a.get("on_ticket") is not False]
+        t_done = [a for a in ticket if a["pick_selection"]]
+        t_w = sum(1 for a in ticket if a["result"] == "Win")
+        t_l = sum(1 for a in ticket if a["result"] == "Loss")
+        t_p = sum(1 for a in ticket if a["result"] == "Push")
         w = sum(1 for a in alist if a["result"] == "Win")
         l = sum(1 for a in alist if a["result"] == "Loss")
         p = sum(1 for a in alist if a["result"] == "Push")
@@ -293,21 +298,26 @@ def page_game_day():
                              "Member": a["player"],
                              "Matchup": f"{a['away_abbr']} @ {a['home_abbr']}",
                              "Pick": a["pick_selection"] or "—",
-                             "Score": score, "Status": verdict})
+                             "Score": score, "Status": verdict,
+                             "On ticket": "✓" if a.get("on_ticket") is not False
+                                          else "—"})
         c1, c2, c3 = st.columns(3)
         c1.metric("Final results", f"{w}-{l}-{p}",
                   f"{w + l + p} of {len(done)} picks settled")
         c2.metric("In play right now", in_play)
-        if not done:
+        if not t_done:
             parlay = "⏳ waiting on picks"
-        elif l > 0:
+        elif t_l > 0:
             parlay = "💀 dead"
-        elif w + l + p == len(done) == len(alist):
+        elif t_w + t_l + t_p == len(t_done) == len(ticket):
             parlay = "🏆 IT HIT?!"
         else:
             parlay = "😤 still alive"
+        off = len(alist) - len(ticket)
         c3.metric("The parlay", parlay,
-                  f"as of {datetime.now(ET):%-I:%M:%S %p ET}")
+                  f"{len(ticket)} legs" + (f" · {off} pick(s) off ticket"
+                                           if off else "")
+                  + f" · {datetime.now(ET):%-I:%M %p ET}")
         st.dataframe(pd.DataFrame(rows_out), use_container_width=True,
                      hide_index=True)
 
@@ -1071,6 +1081,30 @@ def page_this_week():
                              .values(stake=stake or None, odds=odds or None,
                                      payout=payout or None))
             st.rerun()
+        st.markdown("**Legs on the live ticket**")
+        st.caption("Uncheck anything the ticket doesn't cover — a pick left "
+                   "off a re-load still counts for season stats, but won't "
+                   "kill the parlay or the cash-out estimate.")
+        tl = week_assignments(week["id"])
+        tdf = pd.DataFrame([{
+            "id": a["id"], "Member": a["player"],
+            "Matchup": f"{a['away_abbr']} @ {a['home_abbr']}",
+            "Pick": a["pick_selection"] or "—",
+            "Result": a["result"] or "—",
+            "On ticket": a.get("on_ticket") is not False,
+        } for a in tl])
+        tedit = st.data_editor(
+            tdf, hide_index=True, use_container_width=True,
+            disabled=["id", "Member", "Matchup", "Pick", "Result"],
+            column_config={"id": None}, key="ticket_legs")
+        if st.button("💾 Save ticket legs"):
+            with engine().begin() as conn:
+                for _, r in tedit.iterrows():
+                    conn.execute(assignments.update()
+                                 .where(assignments.c.id == int(r["id"]))
+                                 .values(on_ticket=bool(r["On ticket"])))
+            st.rerun()
+
         if week.get("payout"):
             st.success(f"On file: ${week['stake']:,.2f} at {week['odds']:+d} "
                        f"→ pays ${week['payout']:,.2f}"

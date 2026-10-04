@@ -75,6 +75,10 @@ assignments = Table(
     Column("submitted_at", DateTime),
     Column("result", String(6)),         # Win / Loss / Push
     Column("clv", Float),                # closing-line value in pts (+ = good)
+    # False when a pick is NOT a leg of the live ticket — e.g. the coop
+    # re-loaded the parlay mid-week and this leg was left off. The pick still
+    # counts for season stats; it just doesn't price the ticket.
+    Column("on_ticket", Boolean, default=True),
 )
 
 odds_snapshots = Table(
@@ -139,7 +143,8 @@ def _add_missing_columns(conn):
     from sqlalchemy import inspect, text
     insp = inspect(conn)
     wanted = {"games": [("away_1h", "INTEGER"), ("home_1h", "INTEGER")],
-              "assignments": [("period", "VARCHAR(4)"), ("clv", "FLOAT")],
+              "assignments": [("period", "VARCHAR(4)"), ("clv", "FLOAT"),
+                              ("on_ticket", "BOOLEAN DEFAULT TRUE")],
               "weeks": [("stake", "FLOAT"), ("odds", "INTEGER"),
                         ("payout", "FLOAT")]}
     for table, cols in wanted.items():
