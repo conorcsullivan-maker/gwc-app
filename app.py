@@ -1346,6 +1346,13 @@ def page_excel():
 # ----------------------------------------------------------------------- main
 def main():
     cm = _cookie_mgr()
+    if st.session_state.pop("_do_signout", False):
+        # Handled here, at the top of a run that ENDS normally: st.rerun()
+        # aborts the script before a component's delta reaches the browser,
+        # so clearing the cookie inside the button handler never landed.
+        st.session_state["_signed_out"] = True
+        st.session_state.pop("user", None)
+        cookie_clear(cm)
     restore_session(cm)
     pending = st.session_state.pop("_set_cookie", None)
     if pending:
@@ -1372,9 +1379,7 @@ def main():
             pages.append("📤 Excel")
     page = st.sidebar.radio("Go to", pages, label_visibility="collapsed")
     if st.sidebar.button("Log out"):
-        st.session_state["_signed_out"] = True   # don't re-restore this session
-        st.session_state.pop("user", None)
-        cookie_clear(cm)
+        st.session_state["_do_signout"] = True
         st.rerun()
     st.title("The Gentlemen's Wagering Cooperative")
     if page == "🔴 Game Day":
