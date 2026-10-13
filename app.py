@@ -251,17 +251,26 @@ def cookie_set(cm, token):
 
 
 def cookie_clear(cm):
+    """Sign out. Deleting the cookie races the rerun and often loses, so
+    overwrite the value with something that can never validate — then it
+    doesn't matter whether the delete itself lands."""
+    from datetime import timedelta
     if cm is None:
         return
     try:
-        cm.delete(COOKIE, key="gwc_del")
+        cm.set(COOKIE, "signed-out", key="gwc_del",
+               expires_at=datetime.now() - timedelta(days=1))
+    except Exception:
+        pass
+    try:
+        cm.delete(COOKIE, key="gwc_del2")
     except Exception:
         pass
 
 
 def restore_session(cm):
     """Sign the member back in from their cookie, if they have a good one."""
-    if "user" in st.session_state:
+    if "user" in st.session_state or st.session_state.get("_signed_out"):
         return
     pid = read_token(cookie_get(cm))
     if pid is None:
@@ -285,6 +294,7 @@ def login_gate():
         if st.form_submit_button("Enter the Cooperative", type="primary"):
             match = next((p for p in plist if p["name"] == name), None)
             if match and pin == str(match["pin"]):
+                st.session_state.pop("_signed_out", None)
                 st.session_state.user = match
                 if remember:
                     # written on the next run: a component inside a form is
@@ -1362,8 +1372,9 @@ def main():
             pages.append("📤 Excel")
     page = st.sidebar.radio("Go to", pages, label_visibility="collapsed")
     if st.sidebar.button("Log out"):
+        st.session_state["_signed_out"] = True   # don't re-restore this session
+        st.session_state.pop("user", None)
         cookie_clear(cm)
-        del st.session_state.user
         st.rerun()
     st.title("The Gentlemen's Wagering Cooperative")
     if page == "🔴 Game Day":
