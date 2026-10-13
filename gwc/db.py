@@ -124,7 +124,9 @@ def get_engine():
         url = f"sqlite:///{APP_DIR / 'gwc.db'}"
     if url.startswith("postgres://"):     # Supabase/Heroku style -> SQLAlchemy
         url = url.replace("postgres://", "postgresql://", 1)
-    return create_engine(url, pool_pre_ping=True)
+    # pool_pre_ping catches a dead connection at checkout; pool_recycle
+    # retires one before Supabase's pooler closes it underneath us.
+    return create_engine(url, pool_pre_ping=True, pool_recycle=280)
 
 
 _engine = None

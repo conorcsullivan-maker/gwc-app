@@ -270,9 +270,25 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        log("FAILED:\n" + traceback.format_exc())
-        notify("Weekly update hit an error — check weekly_update.log")
-        sys.exit(1)
+    import time as _time
+    from sqlalchemy.exc import DBAPIError
+
+    for _attempt in range(3):
+        try:
+            main()
+            break
+        except DBAPIError as e:
+            # Supabase's pooler drops connections now and then; every step of
+            # main() is idempotent, so just run it again.
+            log(f"database connection problem (try {_attempt + 1}/3): "
+                f"{type(e).__name__}")
+            if _attempt == 2:
+                log("FAILED:\n" + traceback.format_exc())
+                notify("Weekly update couldn't reach the database — "
+                       "run it again from Run Weekly Update.command")
+                sys.exit(1)
+            _time.sleep(20)
+        except Exception:
+            log("FAILED:\n" + traceback.format_exc())
+            notify("Weekly update hit an error — check weekly_update.log")
+            sys.exit(1)
