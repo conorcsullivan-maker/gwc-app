@@ -788,6 +788,26 @@ def get_halftime(espn_id):
         return None
 
 
+def halftime_for(g):
+    """Halftime score for a game, stored once it's known. Without this the
+    dogs tracker re-queries ESPN for every primetime game of the season on
+    every page load."""
+    if g.get("away_1h") is not None and g.get("home_1h") is not None:
+        return {"away_1h": g["away_1h"], "home_1h": g["home_1h"]}
+    if not g.get("espn_id"):
+        return None
+    ht = get_halftime(g["espn_id"])
+    if ht:
+        try:
+            with engine().begin() as conn:
+                conn.execute(games.update().where(games.c.id == g["id"])
+                             .values(away_1h=ht["away_1h"],
+                                     home_1h=ht["home_1h"]))
+        except Exception:
+            pass
+    return ht
+
+
 def signed_home_spread(row, game):
     """Home-team spread (negative = home favored) for one snapshot row."""
     if row["spread"] is None:
@@ -934,7 +954,7 @@ def page_market():
                     continue
                 dog = g["away"] if g["favorite"] == g["home"] else g["home"]
                 line1h = half_line(g["spread"])
-                ht = get_halftime(g["espn_id"]) if g["espn_id"] else None
+                ht = halftime_for(g)
                 if ht:
                     dog_pts = (ht["away_1h"] if dog == g["away"]
                                else ht["home_1h"])
