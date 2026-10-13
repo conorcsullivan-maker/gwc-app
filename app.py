@@ -989,10 +989,26 @@ def page_this_week():
 
     with st.expander("2️⃣ Assignments — randomize & announce",
                      expanded=bool(week_games(week["id"])) and not alist):
-        label = "🎲 Randomize assignments" if not alist else "🎲 Re-roll assignments"
-        if st.button(label, type="primary"):
-            run_randomize(week)
-            st.rerun()
+        n_picks = sum(1 for a in alist if a["pick_selection"])
+        if not alist:
+            if st.button("🎲 Randomize assignments", type="primary"):
+                run_randomize(week)
+                st.rerun()
+        else:
+            # Re-rolling throws away every pick for the week. It used to be a
+            # single unguarded click and it cost us a full week of picks once.
+            reroll_ok = True
+            if n_picks:
+                st.warning(
+                    f"⚠️ Re-rolling deletes this week's assignments **and the "
+                    f"{n_picks} pick(s) already submitted**, then reassigns "
+                    "every game from scratch. There is no undo.")
+                reroll_ok = st.checkbox(
+                    f"Yes — erase {n_picks} submitted pick(s) and reassign",
+                    key=f"confirm_reroll_{week['id']}")
+            if st.button("🎲 Re-roll assignments", disabled=not reroll_ok):
+                run_randomize(week)
+                st.rerun()
         if alist:
             st.dataframe(pd.DataFrame([{
                 "Day": a["day"], "Kickoff": kickoff_label(a),
@@ -1171,7 +1187,11 @@ def page_this_week():
                                  .values(pin=str(r["PIN"])))
             st.success("PINs updated.")
         st.divider()
-        if st.button("🗑️ Delete this week (games and picks included)"):
+        del_ok = st.checkbox(
+            f"Yes — permanently delete Week {week['week_num']}: its games, "
+            "assignments and every pick", key=f"confirm_del_{week['id']}")
+        if st.button("🗑️ Delete this week (games and picks included)",
+                     disabled=not del_ok):
             with engine().begin() as conn:
                 conn.execute(assignments.delete()
                              .where(assignments.c.week_id == week["id"]))
