@@ -210,34 +210,38 @@ def read_token(tok):
         return None
 
 
-def cookie_get():
-    """Read the auth cookie. st.context.cookies is synchronous, so restoring
-    a session never races the component round-trip."""
+def _cookie_mgr():
+    """CookieManager renders a component, so build exactly one per script run
+    and hand it to whoever needs it."""
+    if stx is None:
+        return None
     try:
-        return st.context.cookies.get(COOKIE)
+        return stx.CookieManager(key="gwc_cookies")
     except Exception:
         return None
 
 
-def _cookie_writer():
-    """CookieManager renders a component, so build it at most once per run and
-    only when we actually need to write — i.e. at login or logout."""
-    if stx is None:
-        return None
-    cm = st.session_state.get("_cookie_mgr")
+def cookie_get(cm):
+    """Read the auth cookie. st.context.cookies is the fast path, but
+    Streamlit Cloud's proxy doesn't forward cookies to the server, so fall
+    back to reading it client-side through the component."""
+    try:
+        v = st.context.cookies.get(COOKIE)
+        if v:
+            return v
+    except Exception:
+        pass
     if cm is None:
-        try:
-            cm = stx.CookieManager(key="gwc_cookies")
-            st.session_state["_cookie_mgr"] = cm
-        except Exception:
-            return None
-    return cm
+        return None
+    try:
+        return cm.get(COOKIE)
+    except Exception:
+        return None
 
 
-def cookie_set(token):
+def cookie_set(cm, token):
     from datetime import timedelta
-    cm = _cookie_writer()
-    if not cm:
+    if cm is None:
         return
     try:
         cm.set(COOKIE, token, key="gwc_set",
@@ -246,9 +250,8 @@ def cookie_set(token):
         pass
 
 
-def cookie_clear():
-    cm = _cookie_writer()
-    if not cm:
+def cookie_clear(cm):
+    if cm is None:
         return
     try:
         cm.delete(COOKIE, key="gwc_del")
@@ -256,11 +259,11 @@ def cookie_clear():
         pass
 
 
-def restore_session():
+def restore_session(cm):
     """Sign the member back in from their cookie, if they have a good one."""
     if "user" in st.session_state:
         return
-    pid = read_token(cookie_get())
+    pid = read_token(cookie_get(cm))
     if pid is None:
         return
     match = next((p for p in get_players() if p["id"] == pid), None)
@@ -1332,10 +1335,11 @@ def page_excel():
 
 # ----------------------------------------------------------------------- main
 def main():
-    restore_session()
+    cm = _cookie_mgr()
+    restore_session(cm)
     pending = st.session_state.pop("_set_cookie", None)
     if pending:
-        cookie_set(pending)
+        cookie_set(cm, pending)
     if "user" not in st.session_state:
         login_gate()
         return
@@ -1358,7 +1362,7 @@ def main():
             pages.append("📤 Excel")
     page = st.sidebar.radio("Go to", pages, label_visibility="collapsed")
     if st.sidebar.button("Log out"):
-        cookie_clear()
+        cookie_clear(cm)
         del st.session_state.user
         st.rerun()
     st.title("The Gentlemen's Wagering Cooperative")
