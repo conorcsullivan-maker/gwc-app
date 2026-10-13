@@ -743,8 +743,14 @@ def page_analytics():
                    and p["fav_dog"] == "Underdog"]
         w = sum(1 for p in pt_dogs if p["result"] == "Win")
         l = sum(1 for p in pt_dogs if p["result"] == "Loss")
-        st.metric("🌙 JR's Primetime Dogs Tracker (Thu/Sat/Mon underdogs)",
-                  f"{w}-{l}" + (f"  ({w / (w + l):.0%})" if w + l else ""))
+        st.metric("🌙 Our underdog picks on night games — FULL GAME",
+                  f"{w}-{l}" + (f"  ({w / (w + l):.0%})" if w + l else ""),
+                  help="Coop picks where a member took the dog in a "
+                       "Thu/Fri/Sat/Mon game, graded on the final score.")
+        st.caption("Not the same thing as JR's **1H Primetime Dogs** tracker — "
+                   "that one is a notional bet on *every* primetime dog at the "
+                   "first-half line, settled at halftime, and it lives on the "
+                   "📉 Market page.")
         teams = stats.team_records(picks)
         if teams:
             st.markdown("#### Riding the teams")
