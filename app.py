@@ -12,10 +12,17 @@ import streamlit as st
 from sqlalchemy import and_, select
 
 from gwc import assign, cashout, clv, rules, schedule, stats
+
+try:                       # optional: "stay signed in" cookie
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
 from gwc.db import (CURRENT_SEASON, MEMBERS, SEASON_YEAR, assignments,
                     engine, games, odds_snapshots, players, rows, weeks)
 
 ET = ZoneInfo("America/New_York")
+COOKIE = "gwc_auth"
+REMEMBER_DAYS = 30
 
 st.set_page_config(page_title="Gentlemen's Wagering Cooperative",
                    page_icon="🎩", layout="wide")
@@ -168,6 +175,99 @@ def countdown(target):
     return (f"{d}d {h}h" if d else f"{h}h {m}m")
 
 
+# ------------------------------------------------------------ stay signed in
+def _auth_secret():
+    """Signing key for the remember-me cookie. Falls back to the database
+    URL (already a secret) so no extra configuration is needed."""
+    import os
+    try:
+        s = st.secrets.get("AUTH_SECRET", None)
+    except Exception:
+        s = None
+    return (s or os.environ.get("DATABASE_URL")
+            or str(DEFAULT_WORKBOOK)).encode()
+
+
+def make_token(player_id, days=REMEMBER_DAYS):
+    import hashlib, hmac, time
+    exp = int(time.time()) + days * 86400
+    msg = f"{player_id}.{exp}"
+    sig = hmac.new(_auth_secret(), msg.encode(), hashlib.sha256).hexdigest()[:20]
+    return f"{msg}.{sig}"
+
+
+def read_token(tok):
+    """Return the player id a valid, unexpired token belongs to, else None."""
+    import hashlib, hmac, time
+    try:
+        pid, exp, sig = str(tok).split(".")
+        good = hmac.new(_auth_secret(), f"{pid}.{exp}".encode(),
+                        hashlib.sha256).hexdigest()[:20]
+        if not hmac.compare_digest(sig, good) or int(exp) < time.time():
+            return None
+        return int(pid)
+    except Exception:
+        return None
+
+
+def cookie_get():
+    """Read the auth cookie. st.context.cookies is synchronous, so restoring
+    a session never races the component round-trip."""
+    try:
+        return st.context.cookies.get(COOKIE)
+    except Exception:
+        return None
+
+
+def _cookie_writer():
+    """CookieManager renders a component, so build it at most once per run and
+    only when we actually need to write — i.e. at login or logout."""
+    if stx is None:
+        return None
+    cm = st.session_state.get("_cookie_mgr")
+    if cm is None:
+        try:
+            cm = stx.CookieManager(key="gwc_cookies")
+            st.session_state["_cookie_mgr"] = cm
+        except Exception:
+            return None
+    return cm
+
+
+def cookie_set(token):
+    from datetime import timedelta
+    cm = _cookie_writer()
+    if not cm:
+        return
+    try:
+        cm.set(COOKIE, token, key="gwc_set",
+               expires_at=datetime.now() + timedelta(days=REMEMBER_DAYS))
+    except Exception:
+        pass
+
+
+def cookie_clear():
+    cm = _cookie_writer()
+    if not cm:
+        return
+    try:
+        cm.delete(COOKIE, key="gwc_del")
+    except Exception:
+        pass
+
+
+def restore_session():
+    """Sign the member back in from their cookie, if they have a good one."""
+    if "user" in st.session_state:
+        return
+    pid = read_token(cookie_get())
+    if pid is None:
+        return
+    match = next((p for p in get_players() if p["id"] == pid), None)
+    if match:
+        st.session_state.user = match
+
+
 # ---------------------------------------------------------------------- login
 def login_gate():
     st.title("🎩 The Gentlemen's Wagering Cooperative")
@@ -177,10 +277,16 @@ def login_gate():
     with st.form("login"):
         name = st.selectbox("Who goes there?", [p["name"] for p in plist])
         pin = st.text_input("PIN", type="password", max_chars=10)
+        remember = st.checkbox(f"Keep me signed in on this device "
+                               f"({REMEMBER_DAYS} days)", value=True)
         if st.form_submit_button("Enter the Cooperative", type="primary"):
             match = next((p for p in plist if p["name"] == name), None)
             if match and pin == str(match["pin"]):
                 st.session_state.user = match
+                if remember:
+                    # written on the next run: a component inside a form is
+                    # unreliable
+                    st.session_state["_set_cookie"] = make_token(match["id"])
                 st.rerun()
             else:
                 st.error("Incorrect PIN. Ignorance of the rules shall not "
@@ -1226,6 +1332,10 @@ def page_excel():
 
 # ----------------------------------------------------------------------- main
 def main():
+    restore_session()
+    pending = st.session_state.pop("_set_cookie", None)
+    if pending:
+        cookie_set(pending)
     if "user" not in st.session_state:
         login_gate()
         return
@@ -1248,6 +1358,7 @@ def main():
             pages.append("📤 Excel")
     page = st.sidebar.radio("Go to", pages, label_visibility="collapsed")
     if st.sidebar.button("Log out"):
+        cookie_clear()
         del st.session_state.user
         st.rerun()
     st.title("The Gentlemen's Wagering Cooperative")
