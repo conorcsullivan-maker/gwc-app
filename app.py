@@ -1001,15 +1001,26 @@ def create_week(wk_num):
 
 
 def refresh_lines(week):
+    """Pull current market lines. ESPN drops pregame odds once a game kicks
+    off, so never overwrite a line we already have with a blank one —
+    otherwise refreshing mid-slate erases the closing numbers the dogs
+    tracker and the market comparisons are built on."""
     fetched = {g["espn_id"]: g for g in
                schedule.fetch_week(SEASON_YEAR, week["week_num"])}
     with engine().begin() as conn:
         for g in week_games(week["id"], include_excluded=True):
             f = fetched.get(g["espn_id"])
-            if f:
-                conn.execute(games.update().where(games.c.id == g["id"]).values(
-                    favorite=f["favorite"], spread=f["spread"],
-                    ou_total=f["ou_total"]))
+            if not f:
+                continue
+            vals = {}
+            if f["spread"] is not None:
+                vals["favorite"] = f["favorite"]
+                vals["spread"] = f["spread"]
+            if f["ou_total"] is not None:
+                vals["ou_total"] = f["ou_total"]
+            if vals:
+                conn.execute(games.update()
+                             .where(games.c.id == g["id"]).values(**vals))
 
 
 def run_randomize(week):
